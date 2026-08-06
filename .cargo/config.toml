@@ -1,0 +1,4 @@
+[build]
+# Always compile to WASM. Override with --target if you need the host build
+# for running unit tests: `cargo test --target <your-host-triple>`
+target = "wasm32-unknown-unknown"

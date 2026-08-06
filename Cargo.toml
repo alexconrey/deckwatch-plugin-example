@@ -1,0 +1,18 @@
+[package]
+name = "deckwatch-plugin-example"
+version = "0.1.0"
+edition = "2021"
+
+# Plugins must produce a cdylib so the WASM linker emits a proper module
+# with exported functions. The rlib is kept so `cargo test` works locally
+# against the non-WASM target.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# extism PDK provides the #[plugin_fn] macro and the Json/FnResult types.
+extism-pdk = "1"
+# Shared types — update the git ref to pin a specific SDK release.
+deckwatch-plugin-sdk = { git = "https://github.com/alexconrey/deckwatch-plugin-sdk", tag = "v0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
