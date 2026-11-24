@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push cancels the outdated PR run; runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Installs exactly what rust-toolchain.toml pins (channel, clippy,
+      # rustfmt, wasm32 target). Never a floating `stable`.
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install --no-self-update
+          echo "HOST=$(rustc -vV | sed -n 's/host: //p')" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      # .cargo/config.toml makes wasm32 the default target, so host steps
+      # pass --target explicitly. The exports are wasm32-only, so lint both.
+      - name: cargo clippy (host, all targets)
+        run: cargo clippy --locked --target "$HOST" --all-targets -- -D warnings
+
+      - name: cargo clippy (wasm32)
+        run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo test (host)
+        run: cargo test --locked --target "$HOST"
+
+      - name: cargo build (wasm32, release)
+        run: cargo build --locked --release --target wasm32-unknown-unknown

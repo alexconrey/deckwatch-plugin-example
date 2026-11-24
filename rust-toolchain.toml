@@ -1,0 +1,8 @@
+# Pinned toolchain for local builds and CI. CI installs exactly this with
+# `rustup toolchain install` (no arguments). Same version as the SDK and
+# deckwatch; bump them together.
+[toolchain]
+channel = "1.99"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

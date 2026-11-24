@@ -1,43 +1,46 @@
 name: Release
 
+# Pushing a v* tag builds plugin.wasm with the pinned toolchain and publishes
+# it, with its SHA-256, as a GitHub Release.
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: Build WASM artifact
+  release:
+    name: Build and release plugin.wasm
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install --no-self-update
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check the tag matches Cargo.toml
+        run: |
+          version=$(sed -nE 's/^version *= *"([^"]+)".*/\1/p' Cargo.toml | head -n1)
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error file=Cargo.toml::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
 
       - name: Build
-        # Override the default WASM target from .cargo/config.toml; the
-        # --target flag here is explicit for CI clarity.
-        run: cargo build --release --target wasm32-unknown-unknown
+        run: cargo build --locked --release --target wasm32-unknown-unknown
 
-      - name: Stage artifact
+      - name: Stage plugin.wasm and SHA256SUMS
         run: |
           mkdir -p dist
           cp target/wasm32-unknown-unknown/release/deckwatch_plugin_example.wasm dist/plugin.wasm
+          (cd dist && sha256sum plugin.wasm > SHA256SUMS && cat SHA256SUMS)
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/plugin.wasm
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --generate-notes dist/plugin.wasm dist/SHA256SUMS

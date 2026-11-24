@@ -1,214 +1,174 @@
 # deckwatch-plugin-example
 
-A reference implementation of a [deckwatch](https://github.com/kore/deckwatch) plugin, demonstrating both injection patterns:
+A reference [deckwatch](https://github.com/alexconrey/deckwatch) plugin that uses **every feature of [deckwatch-plugin-sdk](https://github.com/alexconrey/deckwatch-plugin-sdk) v0.10.0**. Read it alongside the [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#readme): this repository shows each feature in working, tested code, and the SDK README documents the contract.
 
-- **Env var injection** — inject environment variables into the primary container when a deployment is annotated with `myorg.io/db: "enabled"` (external service provider pattern)
-- **Sidecar injection** — inject a sidecar container into the pod when annotated with `myorg.io/mesh: "enabled"` (internal cluster service pattern)
+| | |
+|---|---|
+| SDK | `deckwatch-plugin-sdk` `v0.10.0` |
+| Rust | 1.99, pinned in `rust-toolchain.toml` |
+| deckwatch | **v0.6.4 or later** for sidecar volumes, split resources and init containers. The two `key_value` settings need a deckwatch build with `key_value` support (deckwatch `main` since `278de71`; not in any release yet). See [compatibility](#compatibility) |
 
-Use this repo as a starting point for your own organization-specific plugin.
+## What it does
 
----
+- **`apply()`**, for Deployments annotated `example.deckwatch.io/enabled: "true"`:
+  - injects env vars;
+  - adds an agent sidecar and an init container that share a volume with the app;
+  - creates a ConfigMap and a ServiceAccount;
+  - stamps an annotation and a label;
+  - reports what it did as events.
+- **`provision()`**, for the **Example cache** resource on an application's page:
+  - adds a Redis sidecar to every Deployment and CronJob in the application, and publishes its address as env vars;
+  - creates a ServiceAccount and a warm-up Job;
+  - calls an optional webhook, forwarding the trace context.
+- **`deprovision()`** asks deckwatch to delete that Job and ServiceAccount.
+- **`metadata()`** declares:
+  - a settings form with one field of each type;
+  - an MCP tuning field;
+  - the cache resource;
+  - capability ordering;
+  - the minimum deckwatch version.
 
-## How it works
+## SDK features and where they're used
 
-Deckwatch fetches this plugin's compiled WASM binary from GitHub Releases and executes it for every deployment create/update. The plugin receives the deployment's namespace, name, annotations, and labels, and returns what to inject. Nothing is injected unless the deployment explicitly opts in via annotation.
+| SDK feature | Where |
+|---|---|
+| `PluginMetadata`: every field | [`metadata::metadata`](src/metadata.rs) |
+| `ConfigField` of each type a plugin sends (`String`, `Secret`, `Bool`, `Select`, `KeyValue`), with `default`, `required`, `options`, `env_source` | [`metadata::config_schema`](src/metadata.rs) |
+| Reading settings: `bool`, `select` and `key_value` values; `parse_key_value_field` | [`config::Config::from_lookup`](src/config.rs) |
+| `McpTuningField` | [`metadata::metadata`](src/metadata.rs) |
+| `PluginResource`: form fields, `singleton`, `output_keys` | [`metadata::cache_resource`](src/metadata.rs) |
+| `provides`, `optional_depends_on`, and reading another plugin's `plugin_outputs` | [`metadata`](src/metadata.rs), [`apply::apply`](src/apply.rs) |
+| `min_deckwatch_version` (no `v` prefix) | [`metadata`](src/metadata.rs) |
+| `EnvVarSpec::value`, `::config_map_key_ref`, `::secret_key_ref` | [`apply::apply`](src/apply.rs) |
+| `SidecarSpec` with `VolumeSpec` (`emptyDir`, `configMap`, `secret`), `VolumeMountSpec` (`read_only`, `sub_path`), `primary_volume_mounts`, split requests and limits | [`apply::agent_sidecar`](src/apply.rs) |
+| `init_containers` (apply and provision) | [`apply::init_container`](src/apply.rs), [`resources::provision`](src/resources.rs) |
+| `kubernetes_resources` (with `metadata.namespace` set) | [`apply::config_map`](src/apply.rs), [`resources::provision`](src/resources.rs) |
+| `wants_service_account` with an IRSA role | [`apply::apply`](src/apply.rs) |
+| `deployment_annotations`, `deployment_labels` | [`apply::apply`](src/apply.rs) |
+| `outputs` for later plugins | [`apply::apply`](src/apply.rs) |
+| `provisioned_resources` (`"<plugin>/<resource>"`) | [`apply::apply`](src/apply.rs) |
+| Events: `info`, `warn`, `error`, with `resource_id`, `object`, `retryable`, `hint`; the legacy `errors`/`warnings`/`message` copies | [`apply`](src/apply.rs), [`resources`](src/resources.rs), [`exports`](src/exports.rs) |
+| `ResourceProvisionResult`: `state`, `sidecars`, `deployment_annotations`, `status` (`Pending`, `Available`, `Failed`), `retry_after_secs` | [`resources::provision`](src/resources.rs) |
+| A `*_STATUS` state key, which is what makes deckwatch re-poll | [`metadata::cache_state`](src/metadata.rs), [`resources::provision`](src/resources.rs) |
+| `ProvisioningStatus` is `#[non_exhaustive]`: a `match` with a `_` arm | [`resources::status_name`](src/resources.rs) |
+| `ResourceDeprovisionResult`: `message`, `delete_kubernetes_resources` with `KubernetesObjectRef::job` and `::service_account` | [`resources::deprovision`](src/resources.rs) |
+| `trace_context` and `trace_headers()` on an outbound call | [`resources::webhook_request`](src/resources.rs) |
+| `telemetry::code::RESERVED_PREFIX`, `telemetry::TRACEPARENT_HEADER` | tests in [`metadata`](src/metadata.rs) and [`resources`](src/resources.rs) |
+| `now()` (the host's clock) | [`exports::provision`](src/exports.rs) |
+| extism PDK: `config::get`, `http::request`, log macros | [`exports`](src/exports.rs) |
+| Building SDK structs with `..Default::default()` | throughout, including tests |
 
+Not used, on purpose:
+- **`ConfigFieldType::Unknown`** is what a host reads for a type it doesn't know; plugins never send it.
+- **`SidecarSpec.cpu` and `memory`** are deprecated in favour of the split request/limit fields.
+- **`service_account_name`** is the plain alternative to `wants_service_account`.
+- **The `telemetry::attribute` names** label the host's own spans.
+
+## Try it in deckwatch
+
+1. **Register the plugin** (Settings → Plugins). Name it `example`: deckwatch keys `outputs` and its tracking annotations by the registered name.
+
+   ```json
+   {
+     "name": "example",
+     "enabled": true,
+     "source": {
+       "type": "github",
+       "repo": "alexconrey/deckwatch-plugin-example",
+       "ref": "v0.2.0",
+       "path": "plugin.wasm",
+       "use_release": true
+     },
+     "sha256": "<from the release's SHA256SUMS>",
+     "allowed_hosts": ["hooks.example.com"],
+     "config": {
+       "GREETING": "Hi",
+       "SIDECAR_SIZE": "small",
+       "EXTRA_ENV": "{\"TEAM\":\"platform\"}",
+       "WEBHOOK_URL": "https://hooks.example.com/deckwatch"
+     },
+     "inherit_env_keys": ["EXAMPLE_ROLE_ARN"]
+   }
+   ```
+
+   - `allowed_hosts` is only needed for the webhook.
+   - `inherit_env_keys` passes deckwatch's `EXAMPLE_ROLE_ARN` environment variable to the plugin under the same name. That's what the field's `env_source` refers to.
+   - The settings form fills in `config` for you; the JSON shows the raw values.
+
+2. **Opt a Deployment in.** Add the annotation to its `metadata.annotations`:
+
+   ```bash
+   kubectl annotate deployment my-app example.deckwatch.io/enabled=true -n my-namespace
+   ```
+
+   The next create or update through deckwatch injects everything.
+
+3. **Provision the cache.** On the application's page, add **Example cache**, choosing a size and optional tags. The Redis sidecar is added to every Deployment and CronJob labelled `deckwatch.io/application=<app>` on the next reconcile, and `EXAMPLE_CACHE_HOST`, `EXAMPLE_CACHE_PORT` and `EXAMPLE_CACHE_STATUS` appear as env vars.
+
+## What deckwatch does with it today
+
+Checked against deckwatch `main` at `fc03ec2`. The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#known-host-issues) has the details and the deckwatch issues.
+
+- **Not yet read by any deckwatch version:**
+  - `events`: the legacy copies in `errors`, `warnings` and the deprovision `message` are what gets logged;
+  - `trace_context`: so the webhook's `traceparent` header is absent in practice;
+  - `delete_kubernetes_resources`: so the Job and ServiceAccount stay after deprovisioning.
+- **`deployment_annotations` and `deployment_labels` from `apply()`** only take effect on the reconcile loop, which runs only for applications with a provisioned resource ([deckwatch#244](https://github.com/alexconrey/deckwatch/issues/244)).
+- **Init containers:**
+  - from `apply()`, they're appended after the workload's own, not prepended;
+  - from `provision()`, they're never stored ([deckwatch#249](https://github.com/alexconrey/deckwatch/issues/249)).
+- **The `API_TOKEN` secret reaches the plugin encrypted** when deckwatch has `DECKWATCH_ENCRYPTION_KEY` set ([deckwatch#251](https://github.com/alexconrey/deckwatch/issues/251)).
+- **The deprovision `message` is only logged** ([deckwatch#250](https://github.com/alexconrey/deckwatch/issues/250)), and the cache sidecar stays when the cache was the application's last resource ([deckwatch#248](https://github.com/alexconrey/deckwatch/issues/248)).
+- **The webhook.** HTTP error statuses come back to the plugin and become a warning. But a call that can't be made at all aborts the whole `provision()` call, and deckwatch reports provisioning as failed. That covers a host not in `allowed_hosts`, a bad URL, DNS or connection failures, and timeouts. extism handles these in the host, so the plugin can't catch them.
+- **Log lines** from the PDK macros appear in deckwatch's logs by default since deckwatch `36e6637` (target `extism::pdk`).
+
+## Compatibility
+
+- **deckwatch v0.6.4+:** everything except the two `key_value` settings (`EXTRA_ENV`, and the cache's `TAGS`).
+- **deckwatch v0.6.7 and older reject the whole metadata.** They don't know `key_value`, so the plugin loads with no settings form and no cache resource. `apply()` still runs, with default settings. If you target released deckwatch, remove the `key_value` fields from [`metadata.rs`](src/metadata.rs).
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/lib.rs` | Module overview |
+| `src/metadata.rs` | `metadata()`: settings form, resource, capabilities, keys, event codes |
+| `src/config.rs` | Reading settings, with defaults and validation |
+| `src/apply.rs` | `apply()` |
+| `src/resources.rs` | `provision()`, `deprovision()`, the webhook |
+| `src/exports.rs` | The four `#[plugin_fn]` exports (wasm32 only), the only code that calls the extism host |
+| `.cargo/config.toml` | Makes `wasm32-unknown-unknown` the default build target |
+| `rust-toolchain.toml` | Pins Rust 1.99 with the wasm32 target |
+
+## Develop
+
+```bash
+make check   # fmt, clippy (host and wasm32), tests: what CI runs
+make test    # unit tests on the host
+make build   # dist/plugin.wasm
 ```
-Deckwatch                          Plugin (WASM)
-────────────────────────────────────────────────────────
-deployment create/update request
-  │
-  ├─ build Deployment object with user-supplied values
-  │
-  ├─ load plugins from AppState (fetched at startup)
-  │
-  ├─ call plugin.apply(PluginContext) ──────────────────►  inspect annotations
-  │                                                         return env_vars + sidecars
-  │  ◄────────────────────────────────────────────────────
-  │
-  ├─ merge plugin results (user values always win)
-  │
-  └─ apply to Kubernetes API
-```
 
----
+- **The plugin's logic is plain Rust, so `cargo test` runs on the host.** Only `src/exports.rs` touches the extism host, and it's compiled for wasm32 only. `.cargo/config.toml` makes wasm32 the default target, so host commands pass `--target "$(rustc -vV | sed -n 's/host: //p')"`; the Makefile does this for you.
+- **`crate-type = ["cdylib"]`:** don't add `"rlib"` (see the SDK README).
 
-## Repository layout
+## Release
 
-```
-.
-├── src/
-│   └── lib.rs                  # Plugin logic — start here
-├── .cargo/
-│   └── config.toml             # Sets wasm32-unknown-unknown as default build target
-├── .github/
-│   └── workflows/
-│       └── release.yml         # Builds and publishes plugin.wasm on git tag
-├── dist/
-│   └── .gitkeep                # Artifact directory (plugin.wasm goes here after build)
-├── Cargo.toml
-└── Makefile                    # make build / make test / make clean
-```
+Bump `version` in `Cargo.toml`, merge, then push a matching tag (`vX.Y.Z`).
 
----
+`.github/workflows/release.yml` then:
+- checks the tag against `Cargo.toml`;
+- builds with the pinned toolchain and `--locked`;
+- creates the GitHub Release with `plugin.wasm` and `SHA256SUMS`.
+
+Put that checksum in the plugin's `sha256` setting so deckwatch rejects any other binary.
 
 ## Using this as a template
 
-### 1. Fork or clone
-
-```bash
-git clone https://github.com/alexconrey/deckwatch-plugin-example
-cd deckwatch-plugin-example
-```
-
-### 2. Replace the annotation keys
-
-The example uses `myorg.io/db` and `myorg.io/mesh`. Replace these with your organization's domain:
-
-```rust
-// src/lib.rs — change the annotation key strings
-if ctx.annotations.get("yourorg.io/db").map(|v| v == "enabled").unwrap_or(false) {
-```
-
-### 3. Replace the injected values
-
-Update `DATABASE_URL`, image references, env vars, and resource sizes to match your environment.
-
-### 4. Update `Cargo.toml`
-
-Change the package name and description. Point the `deckwatch-plugin-sdk` dependency at the tag you want to pin to.
-
-### 5. Build and test
-
-```bash
-# Build the WASM binary
-make build
-
-# Run unit tests on the host (not WASM — see Testing section)
-make test
-```
-
----
-
-## Building
-
-Prerequisites: Rust stable + `wasm32-unknown-unknown` target.
-
-```bash
-rustup target add wasm32-unknown-unknown
-make build
-# outputs: dist/plugin.wasm
-```
-
-Or without Make:
-
-```bash
-cargo build --release --target wasm32-unknown-unknown
-cp target/wasm32-unknown-unknown/release/deckwatch_plugin_example.wasm dist/plugin.wasm
-```
-
----
-
-## Testing
-
-Unit tests run against the host Rust target because compiled WASM requires a runtime (wasmtime, browser, or WASI) to execute. The `apply_inner` function extracted in `src/lib.rs` is the testable pure function:
-
-```bash
-make test
-# equivalent: cargo test --target $(rustc -vV | sed -n 's/host: //p')
-```
-
-Tests cover:
-- No annotations → no injection
-- `myorg.io/db: enabled` → `DATABASE_URL` and `DB_POOL_SIZE` injected
-- `myorg.io/mesh: enabled` → `mesh-agent` sidecar injected
-
----
-
-## Releasing
-
-Push a version tag to trigger the GitHub Actions release workflow, which builds the WASM binary and attaches it as a release asset:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The workflow produces `plugin.wasm` as a release asset at:
-```
-https://github.com/alexconrey/deckwatch-plugin-example/releases/download/v1.0.0/plugin.wasm
-```
-
----
-
-## Configuring in deckwatch
-
-Once released, register the plugin in deckwatch's Settings → Plugins section:
-
-```json
-{
-  "plugins": [
-    {
-      "name": "example-plugin",
-      "enabled": true,
-      "source": {
-        "type": "github",
-        "repo": "alexconrey/deckwatch-plugin-example",
-        "ref": "v1.0.0",
-        "path": "plugin.wasm",
-        "use_release": true
-      }
-    }
-  ]
-}
-```
-
-The `name` field becomes the annotation key suffix. The plugin will track what it injected under:
-- `deckwatch.plugin-env/example-plugin` — env vars it injected
-- `deckwatch.plugin-sidecar/example-plugin` — sidecars it injected
-
----
-
-## Opting deployments in
-
-Add annotations to any deployment you want the plugin to act on. In deckwatch, open the deployment → YAML editor:
-
-```yaml
-metadata:
-  annotations:
-    myorg.io/db: "enabled"     # triggers env var injection
-    myorg.io/mesh: "enabled"   # triggers sidecar injection
-```
-
-Or use `kubectl`:
-
-```bash
-kubectl annotate deployment my-app myorg.io/db=enabled -n my-namespace
-```
-
----
+1. Rename the package in `Cargo.toml` and `metadata::NAME`, and register the plugin under the same name.
+2. Change the opt-in annotation (`apply::OPT_IN`), the config keys (`metadata::keys`) and the event codes (`metadata::codes`, keeping the `<name>.` prefix).
+3. Keep the split between plain logic and `exports.rs`, so everything stays testable on the host.
+4. Pin the SDK by tag, never by branch.
 
 ## Private repositories
 
-If your plugin repo is private, configure a `git_token_secrets` entry in deckwatch and reference it by name in the plugin config:
-
-```json
-{
-  "plugins": [
-    {
-      "name": "example-plugin",
-      "enabled": true,
-      "source": { ... },
-      "token_secret": "my-github-token"
-    }
-  ]
-}
-```
-
-See [deckwatch PLUGINS.md](https://github.com/kore/deckwatch/blob/main/docs/PLUGINS.md) for full token configuration instructions.
-
----
-
-## SDK reference
-
-This plugin depends on [deckwatch-plugin-sdk](https://github.com/alexconrey/deckwatch-plugin-sdk) for the shared `PluginContext` and `PluginResult` types. See the SDK README for full type documentation and testing guidance.
+If your plugin repository is private, add a git token under `git_token_secrets` in deckwatch's settings, and reference it by name with `"token_secret": "<name>"` in the plugin's entry. deckwatch sends it as a bearer token when fetching the binary.
