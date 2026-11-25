@@ -4,18 +4,18 @@
 //! `provisioned_resources`); `PluginResult` (`env_vars`, `sidecars`,
 //! `init_containers`, `kubernetes_resources`, `outputs`,
 //! `wants_service_account`, `deployment_annotations`, `deployment_labels`,
-//! and events through `info`/`warn`); the three `EnvVarSpec` constructors;
+//! and warning events through `warn`); the three `EnvVarSpec` constructors;
 //! `SidecarSpec` with `VolumeSpec` (`emptyDir`, `configMap`, `secret`),
 //! `VolumeMountSpec` (`read_only`, `sub_path`), `primary_volume_mounts` and
-//! split resource requests and limits; `KubernetesObjectRef`.
+//! split resource requests and limits.
 //!
 //! deckwatch calls `apply()` on Deployment create and update, and from its
 //! reconcile loop for applications with a provisioned resource. It uses
 //! different fields on each path; see the SDK README, "Host behaviour".
 
 use deckwatch_plugin_sdk::{
-    EnvVarSpec, KubernetesObjectRef, PluginContext, PluginResult, SidecarSpec, VolumeMountSpec,
-    VolumeSpec, WantsServiceAccount,
+    EnvVarSpec, PluginContext, PluginResult, SidecarSpec, VolumeMountSpec, VolumeSpec,
+    WantsServiceAccount,
 };
 use serde_json::{json, Value};
 
@@ -93,8 +93,10 @@ pub fn apply(ctx: &PluginContext, cfg: &Config) -> PluginResult {
         .kubernetes_resources
         .push(config_map(ctx, cfg, &name));
 
-    // deckwatch creates or patches this ServiceAccount and binds the pod to
-    // it, unless the pod already names a ServiceAccount other than "default".
+    // deckwatch creates or patches this ServiceAccount after the Deployment
+    // is saved. It binds the pod to it only if the pod names no account or
+    // "default"; otherwise it keeps the pod's account, and deckwatch 0.7.0
+    // reports a plugin.policy_rejected warning.
     // The IRSA role comes from settings, or from deckwatch-plugin-aws's output
     // when that plugin runs first (OPTIONAL_DEPENDS_ON).
     let role_arn = cfg.role_arn.clone().or_else(|| {
@@ -108,8 +110,8 @@ pub fn apply(ctx: &PluginContext, cfg: &Config) -> PluginResult {
         irsa_role_arn: role_arn.unwrap_or_default(),
     });
 
-    // As of deckwatch fc03ec2 these two only take effect on the reconcile
-    // loop (deckwatch#244), not on Deployment create and update.
+    // In deckwatch 0.7.0 (and v0.6.7) these two only take effect on the
+    // reconcile loop (deckwatch#244), not on Deployment create and update.
     result
         .deployment_annotations
         .insert(GREETING_ANNOTATION.into(), cfg.greeting.clone());
@@ -137,16 +139,9 @@ pub fn apply(ctx: &PluginContext, cfg: &Config) -> PluginResult {
         }
     }
 
-    let summary = format!(
-        "{} env var(s), {} sidecar(s), {} init container(s) for {}/{}",
-        result.env_vars.len(),
-        result.sidecars.len(),
-        result.init_containers.len(),
-        ctx.namespace,
-        ctx.deployment_name,
-    );
-    result.info(codes::APPLIED, summary).object =
-        Some(KubernetesObjectRef::new("v1", "ConfigMap", &name));
+    // No routine "applied" event: deckwatch 0.7.0 logs every event, and
+    // apply() also runs on every 10-second reconcile, so a per-call info
+    // event would repeat endlessly. Events here report problems only.
     result
 }
 
@@ -230,8 +225,8 @@ fn agent_sidecar(cfg: &Config, config_map: &str) -> SidecarSpec {
 }
 
 /// busybox's default command (`sh`) exits at once without a terminal, so this
-/// init container completes immediately. As of deckwatch fc03ec2 init
-/// containers are appended, so they run after the workload's own
+/// init container completes immediately. In deckwatch 0.7.0 (and v0.6.7)
+/// init containers are appended, so they run after the workload's own
 /// (deckwatch#249). deckwatch doesn't add an init container's own `volumes`,
 /// so this one mounts the volume the agent sidecar declares.
 fn init_container() -> SidecarSpec {
@@ -458,18 +453,15 @@ mod tests {
         // Older hosts read `warnings`; the helper copied the event there.
         assert_eq!(result.warnings, [warning.legacy_text()]);
 
-        let applied = result
-            .events
-            .iter()
-            .find(|e| e.code == codes::APPLIED)
-            .unwrap();
-        assert_eq!(applied.severity, EventSeverity::Info);
-        assert_eq!(
-            applied.object,
-            Some(KubernetesObjectRef::new("v1", "ConfigMap", "api-example"))
-        );
-        // Info events have no legacy field.
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn no_events_without_problems() {
+        // apply() runs on every reconcile; routine calls report nothing.
+        let result = apply(&opted_in(), &Config::defaults());
+        assert!(result.events.is_empty());
+        assert!(result.warnings.is_empty() && result.errors.is_empty());
     }
 
     #[test]

@@ -9,11 +9,12 @@
 //! `extism_pdk::http::request` (only to hosts in the plugin's
 //! `allowed_hosts`), and the PDK log macros.
 //!
-//! Logging: deckwatch keeps PDK log lines since deckwatch `36e6637` (target
-//! `extism::pdk`). Their only field is extism's per-call instance id, so
-//! each message names the plugin. `apply` runs on every 10-second reconcile
-//! for applications with a provisioned resource, so routine lines use
-//! `debug!`.
+//! Logging: deckwatch keeps PDK log lines (target `extism::pdk`) since
+//! deckwatch `36e6637`. Their only field is extism's per-call instance id,
+//! but deckwatch 0.7.0 emits them inside the call's span, which names the
+//! plugin; messages still name it for older hosts. `apply` runs on every
+//! 10-second reconcile for applications with a provisioned resource, so
+//! routine lines use `debug!`.
 
 use deckwatch_plugin_sdk::{
     now, PluginContext, PluginMetadata, PluginResult, ResourceDeprovisionRequest,
@@ -57,9 +58,11 @@ pub fn provision(
 
     // HTTP error statuses come back as values and become a warning. A call
     // that can't be made at all (host not in allowed_hosts, bad URL, DNS,
-    // connection, timeout) traps in the extism host: the whole provision()
-    // call fails and deckwatch reports provisioning as failed. Err below only
-    // covers plugin-side problems, such as encoding the request.
+    // connection) traps in the extism host: the whole provision() call fails
+    // and deckwatch reports provisioning as failed. There's no HTTP timeout:
+    // extism only enforces the call's time limit, and deckwatch sets none
+    // (deckwatch#301). Err below only covers plugin-side problems, such as
+    // encoding the request.
     if let Some((request, body)) = crate::resources::webhook_request(&req, &result, &cfg, now()) {
         match http::request::<Vec<u8>>(&request, Some(body)) {
             Ok(response) if (200..300).contains(&response.status_code()) => {

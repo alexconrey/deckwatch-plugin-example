@@ -25,11 +25,13 @@ pub const NAME: &str = "example";
 pub const PROVIDES: &str = "example:greeting";
 pub const OPTIONAL_DEPENDS_ON: &str = "aws:iam-role";
 
-/// deckwatch v0.6.4 is the first release that understands sidecar volumes,
-/// split resource requests and limits, and init containers, and the first
-/// that checks this field at all. The `key_value` fields below need a newer
-/// deckwatch still; see [`config_schema`].
-pub const MIN_DECKWATCH_VERSION: &str = "0.6.4";
+/// deckwatch 0.7.0 (not yet tagged; checked against `main` at `58ff03c`) is
+/// the first version that understands the `key_value` fields below and
+/// reads `events`. Sidecar volumes, split requests and limits, init
+/// containers and this check itself need v0.6.4+. A deckwatch that predates
+/// `key_value` can't parse this metadata at all, so on those this check never
+/// runs; see [`config_schema`].
+pub const MIN_DECKWATCH_VERSION: &str = "0.7.0";
 
 /// Config keys. The settings form saves values under these, and
 /// `extism_pdk::config::get` reads them.
@@ -50,7 +52,6 @@ pub mod keys {
 
 /// Event codes: `<plugin-name>.<code>`. deckwatch reserves `plugin.`.
 pub mod codes {
-    pub const APPLIED: &str = "example.applied";
     pub const CONFIG_INVALID: &str = "example.config_invalid";
     pub const CACHE_CREATING: &str = "example.cache_creating";
     pub const CACHE_READY: &str = "example.cache_ready";
@@ -61,8 +62,7 @@ pub mod codes {
     pub const WEBHOOK_FAILED: &str = "example.webhook_failed";
 
     /// Every code above, for tests.
-    pub const ALL: [&str; 9] = [
-        APPLIED,
+    pub const ALL: [&str; 8] = [
         CONFIG_INVALID,
         CACHE_CREATING,
         CACHE_READY,
@@ -134,11 +134,11 @@ fn size_options() -> Vec<String> {
 
 /// The settings form: one field of each type a plugin should send.
 ///
-/// **`key_value` needs a newer deckwatch than v0.6.4.** deckwatch `main` has
-/// supported it since `278de71`, but no release does yet. A deckwatch that
-/// doesn't know `key_value` rejects this plugin's whole metadata, so the
-/// plugin loads with no settings form and no cache resource (`apply` still
-/// runs). Drop the `key_value` fields if you target released deckwatch.
+/// **`key_value` needs deckwatch 0.7.0** (not yet tagged; on `main` since
+/// `278de71`). The v0.6.7 release and older reject this plugin's whole
+/// metadata, so the plugin loads with no settings form and no cache resource
+/// (`apply` still runs). Drop the `key_value` fields, and lower
+/// [`MIN_DECKWATCH_VERSION`], if you target v0.6.7.
 pub fn config_schema() -> Vec<ConfigField> {
     vec![
         ConfigField {
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn min_deckwatch_version_has_no_v_prefix() {
-        // deckwatch compares only the integer parts, so "v0.6.4" would read as 6.4.0.
+        // deckwatch compares only the integer parts, so "v0.7.0" would read as 7.0.0.
         assert!(MIN_DECKWATCH_VERSION
             .split('.')
             .all(|p| p.parse::<u32>().is_ok()));

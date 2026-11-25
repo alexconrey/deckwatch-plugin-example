@@ -43,8 +43,8 @@ pub enum Observed {
 /// The result of `provision()` for the cache.
 ///
 /// deckwatch calls `provision()` when an operator adds the resource, when
-/// they refresh it, and (as of deckwatch fc03ec2, every 30 s) while its
-/// stored `state` looks pending. Each call gets the `fields` from the form.
+/// they refresh it, and every 30 s while its stored `state` looks pending.
+/// Each call gets the `fields` from the form.
 pub fn provision(req: &ResourceProvisionRequest, observed: &Observed) -> ResourceProvisionResult {
     let mut result = ResourceProvisionResult::default();
     if req.resource_id != CACHE_RESOURCE_ID {
@@ -106,8 +106,8 @@ pub fn provision(req: &ResourceProvisionRequest, observed: &Observed) -> Resourc
                 .state
                 .insert(cache_state::STATUS.into(), "available".into());
             result.sidecars.push(cache_sidecar(size, *port));
-            // As of deckwatch fc03ec2 init containers from provision() aren't
-            // stored (deckwatch#249), so this has no effect yet.
+            // deckwatch (0.7.0 and v0.6.7) doesn't store init containers from
+            // provision() (deckwatch#249), so this has no effect there.
             result.init_containers.push(cache_init());
             result
                 .deployment_annotations
@@ -117,12 +117,13 @@ pub fn provision(req: &ResourceProvisionRequest, observed: &Observed) -> Resourc
                 .push(service_account(req, &tags));
             result.kubernetes_resources.push(warmup_job(req, &tags));
             result.status = ProvisioningStatus::Available;
-            result
-                .info(
-                    codes::CACHE_READY,
-                    format!("the cache is ready at {host}:{port}"),
-                )
-                .resource_id = Some(req.resource_id.clone());
+            let job = warmup_job_name(&req.application_name);
+            let event = result.info(
+                codes::CACHE_READY,
+                format!("the cache is ready at {host}:{port}; warm-up Job {job} requested"),
+            );
+            event.resource_id = Some(req.resource_id.clone());
+            event.object = Some(KubernetesObjectRef::job(job));
         }
         Observed::Failed(reason) => {
             result
@@ -154,13 +155,16 @@ pub fn deprovision(req: &ResourceDeprovisionRequest) -> ResourceDeprovisionResul
             .resource_id = Some(req.resource_id.clone());
         return result;
     }
-    // As of deckwatch fc03ec2 this is only logged (deckwatch#250), and the
-    // cache sidecar stays in the Deployments when this was the application's
-    // last resource (deckwatch#248).
+    // deckwatch 0.7.0 returns this in the DELETE response and shows it in the
+    // UI (v0.6.7 only logs it). When this was the application's last resource,
+    // 0.7.0's field sweep removes the cache sidecar; v0.6.7 leaves it.
     result.message = "deckwatch stops injecting the cache sidecar".into();
-    // Objects provision() created that deckwatch should delete. Only v1
-    // ServiceAccounts and batch/v1 Jobs in the application's namespace; no
-    // deckwatch version supports this yet, so today they stay.
+    // Objects provision() created, for deckwatch to delete: only v1
+    // ServiceAccounts and batch/v1 Jobs in the application's namespace.
+    // deckwatch 0.7.0 deletes the Jobs first, then each ServiceAccount that
+    // no workload still uses (never the namespace's default one). It doesn't
+    // check ownership, so list only what this plugin created. v0.6.7 ignores
+    // the field.
     result.delete_kubernetes_resources = vec![
         KubernetesObjectRef::job(warmup_job_name(&req.application_name)),
         KubernetesObjectRef::service_account(service_account_name(&req.application_name)),
@@ -193,7 +197,7 @@ pub fn webhook_request(
     }
     // Forward deckwatch's trace so the receiver's spans join it.
     // trace_headers() is empty unless trace_context is a valid W3C
-    // traceparent. No deckwatch version sends one yet.
+    // traceparent. deckwatch 0.7.0 sends one while it exports OTLP traces.
     for (name, value) in req.trace_headers() {
         request = request.with_header(name, value);
     }
@@ -370,6 +374,10 @@ mod tests {
         let event = &result.events[0];
         assert_eq!(event.code, codes::CACHE_READY);
         assert_eq!(event.resource_id.as_deref(), Some(CACHE_RESOURCE_ID));
+        assert_eq!(
+            event.object,
+            Some(KubernetesObjectRef::job("shop-example-cache-warmup"))
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ A reference [deckwatch](https://github.com/alexconrey/deckwatch) plugin that use
 |---|---|
 | SDK | `deckwatch-plugin-sdk` `v0.10.0` |
 | Rust | 1.99, pinned in `rust-toolchain.toml` |
-| deckwatch | **v0.6.4 or later** for sidecar volumes, split resources and init containers. The two `key_value` settings need a deckwatch build with `key_value` support (deckwatch `main` since `278de71`; not in any release yet). See [compatibility](#compatibility) |
+| deckwatch | **0.7.0 or later** (not yet tagged; checked against `main` at `58ff03c`), the first version that understands the two `key_value` settings and reads plugin events. The rest works on v0.6.4+, but v0.6.7 and older can't parse this plugin's metadata. See [compatibility](#compatibility) |
 
 ## What it does
 
@@ -15,7 +15,7 @@ A reference [deckwatch](https://github.com/alexconrey/deckwatch) plugin that use
   - adds an agent sidecar and an init container that share a volume with the app;
   - creates a ConfigMap and a ServiceAccount;
   - stamps an annotation and a label;
-  - reports what it did as events.
+  - reports configuration problems as warning events.
 - **`provision()`**, for the **Example cache** resource on an application's page:
   - adds a Redis sidecar to every Deployment and CronJob in the application, and publishes its address as env vars;
   - creates a ServiceAccount and a warm-up Job;
@@ -93,7 +93,7 @@ Not used, on purpose:
 
    - `allowed_hosts` is only needed for the webhook.
    - `inherit_env_keys` passes deckwatch's `EXAMPLE_ROLE_ARN` environment variable to the plugin under the same name. That's what the field's `env_source` refers to.
-   - The settings form fills in `config` for you; the JSON shows the raw values.
+   - The settings form fills in `config` for you; the JSON shows the raw values. deckwatch 0.7.0 shows `EXTRA_ENV`, a `key_value` setting, as a text input of the JSON, and refuses to save a value that isn't a JSON object of strings.
 
 2. **Opt a Deployment in.** Add the annotation to its `metadata.annotations`:
 
@@ -101,31 +101,40 @@ Not used, on purpose:
    kubectl annotate deployment my-app example.deckwatch.io/enabled=true -n my-namespace
    ```
 
-   The next create or update through deckwatch injects everything.
+   The next create or update through deckwatch's REST API (`POST /api/namespaces/{ns}/deployments` or `PUT /api/namespaces/{ns}/deployments/{name}`) runs `apply()`. deckwatch adds the env vars, the agent sidecar, its init container and the ServiceAccount name to the Deployment, then creates the ConfigMap and the ServiceAccount. The annotation and label come later ([below](#what-deckwatch-does-with-it-today)). MCP `create_deployment` and `update_deployment`, and YAML edits, don't run plugins ([deckwatch#283](https://github.com/alexconrey/deckwatch/issues/283)).
 
-3. **Provision the cache.** On the application's page, add **Example cache**, choosing a size and optional tags. The Redis sidecar is added to every Deployment and CronJob labelled `deckwatch.io/application=<app>` on the next reconcile, and `EXAMPLE_CACHE_HOST`, `EXAMPLE_CACHE_PORT` and `EXAMPLE_CACHE_STATUS` appear as env vars.
+3. **Provision the cache.** On the application's page, add **Example cache**, choosing a size and optional tags. deckwatch 0.7.0 shows `TAGS` as a text input and doesn't check it, so enter a JSON object such as `{"team":"shop"}`. The Redis sidecar is added to every Deployment and CronJob labelled `deckwatch.io/application=<app>` on the next reconcile, and `EXAMPLE_CACHE_HOST`, `EXAMPLE_CACHE_PORT` and `EXAMPLE_CACHE_STATUS` appear as env vars.
 
 ## What deckwatch does with it today
 
-Checked against deckwatch `main` at `fc03ec2`. The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#known-host-issues) has the details and the deckwatch issues.
+Checked against deckwatch 0.7.0 (not yet tagged; `main` at `58ff03c`). The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#host-behaviour) has the details, including how the v0.6.7 release differs.
 
-- **Not yet read by any deckwatch version:**
-  - `events`: the legacy copies in `errors`, `warnings` and the deprovision `message` are what gets logged;
-  - `trace_context`: so the webhook's `traceparent` header is absent in practice;
-  - `delete_kubernetes_resources`: so the Job and ServiceAccount stay after deprovisioning.
-- **`deployment_annotations` and `deployment_labels` from `apply()`** only take effect on the reconcile loop, which runs only for applications with a provisioned resource ([deckwatch#244](https://github.com/alexconrey/deckwatch/issues/244)).
-- **Init containers:**
-  - from `apply()`, they're appended after the workload's own, not prepended;
-  - from `provision()`, they're never stored ([deckwatch#249](https://github.com/alexconrey/deckwatch/issues/249)).
-- **The `API_TOKEN` secret reaches the plugin encrypted** when deckwatch has `DECKWATCH_ENCRYPTION_KEY` set ([deckwatch#251](https://github.com/alexconrey/deckwatch/issues/251)).
-- **The deprovision `message` is only logged** ([deckwatch#250](https://github.com/alexconrey/deckwatch/issues/250)), and the cache sidecar stays when the cache was the application's last resource ([deckwatch#248](https://github.com/alexconrey/deckwatch/issues/248)).
-- **The webhook.** HTTP error statuses come back to the plugin and become a warning. But a call that can't be made at all aborts the whole `provision()` call, and deckwatch reports provisioning as failed. That covers a host not in `allowed_hosts`, a bad URL, DNS or connection failures, and timeouts. extism handles these in the host, so the plugin can't catch them.
-- **Log lines** from the PDK macros appear in deckwatch's logs by default since deckwatch `36e6637` (target `extism::pdk`).
+- **Events** are logged, returned in the create/update and provisioning responses, recorded on the plugin's status (shown on the application page), and published as Kubernetes Events on the affected Deployments. deckwatch drops the legacy copies the helpers write, so nothing is reported twice.
+  - **Configuration problems** are warnings. On a Deployment labelled `deckwatch.io/application`, they mark the plugin **degraded** for that application.
+  - **Invalid `TAGS`** is an error: it marks the cache **failing** and sends a `plugin_failing` notification (at most one per 10 minutes). The other error codes, `example.unknown_resource` and `example.cache_failed`, show the pattern but don't occur here: deckwatch only provisions resources the plugin declares, and `exports` always reports the sidecar cache as ready.
+- **`trace_context`** arrives while deckwatch exports OTLP traces, and the webhook forwards it as `traceparent`.
+- **Deprovisioning** deletes the warm-up Job and the cache's ServiceAccount listed in `delete_kubernetes_resources`. The deprovision `message` comes back in the DELETE response and appears in the UI.
+- **The field sweep:** when an application's last resource (here, the cache) is removed, deckwatch removes everything its reconcile loop applied: the cache sidecar, its env vars and annotation, and `apply()`'s annotation and label.
+- **Still open in deckwatch:**
+  - `deployment_annotations` and `deployment_labels` from `apply()` are only applied by the reconcile loop, so the annotation and label only appear on the Deployments of an application with a provisioned resource ([deckwatch#244](https://github.com/alexconrey/deckwatch/issues/244));
+  - nothing `apply()` injected is removed when the plugin is disabled or a Deployment opts out ([deckwatch#248](https://github.com/alexconrey/deckwatch/issues/248)), and the ConfigMap and ServiceAccount it created aren't deleted either;
+  - init containers from `apply()` are appended after the workload's own, and those from `provision()` are never stored ([deckwatch#249](https://github.com/alexconrey/deckwatch/issues/249));
+  - the `API_TOKEN` secret reaches the plugin encrypted when it was saved through the settings form and deckwatch has `DECKWATCH_ENCRYPTION_KEY` set ([deckwatch#251](https://github.com/alexconrey/deckwatch/issues/251));
+  - over MCP `provision_resource`, pass `TAGS` as a JSON string: a non-string value makes deckwatch drop every field ([deckwatch#302](https://github.com/alexconrey/deckwatch/issues/302)).
+- **The webhook:**
+  - HTTP error statuses come back to the plugin and become a retryable warning.
+  - A request that can't be made at all aborts the whole `provision()` call, and provisioning fails with HTTP 502. That covers a host not in `allowed_hosts`, a bad URL, and DNS or connection failures. extism handles these in the host, so the plugin can't catch them.
+  - **No timeout.** extism has no HTTP timeout of its own, and deckwatch sets no time limit on plugin calls ([deckwatch#301](https://github.com/alexconrey/deckwatch/issues/301)), so a webhook that accepts the connection but never answers holds up the provisioning request indefinitely.
+- **Log lines** from the PDK macros at `info` and above appear in deckwatch's logs by default since deckwatch `36e6637` (target `extism::pdk`), inside a span that names the plugin. `apply()`'s `debug!` lines also need `extism::pdk=debug` in `RUST_LOG`, which replaces deckwatch's whole default filter.
 
 ## Compatibility
 
-- **deckwatch v0.6.4+:** everything except the two `key_value` settings (`EXTRA_ENV`, and the cache's `TAGS`).
-- **deckwatch v0.6.7 and older reject the whole metadata.** They don't know `key_value`, so the plugin loads with no settings form and no cache resource. `apply()` still runs, with default settings. If you target released deckwatch, remove the `key_value` fields from [`metadata.rs`](src/metadata.rs).
+- **deckwatch 0.7.0+** (not yet tagged): everything. The plugin declares `min_deckwatch_version: "0.7.0"`.
+- **deckwatch v0.6.7 and older can't parse the plugin's metadata**, because they don't know `key_value`.
+  - They log that only at `DEBUG`, and load the plugin with empty metadata: no settings form, no cache resource, and no version check.
+  - `apply()` still runs, with the `config` values stored in the plugin's entry. Its events are ignored; only their legacy copies in `warnings` are logged.
+  - To target v0.6.4–v0.6.7, remove the `key_value` fields from [`metadata.rs`](src/metadata.rs) and lower `MIN_DECKWATCH_VERSION` to `"0.6.4"`.
+- **`main` builds from `278de71` up to, but not including, `f836fec`** parse the metadata but still call themselves 0.6.7, so the version check refuses to load the plugin.
 
 ## Layout
 

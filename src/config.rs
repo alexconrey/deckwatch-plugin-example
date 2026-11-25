@@ -69,8 +69,8 @@ pub struct Problem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub greeting: String,
-    /// A `secret` field. As of deckwatch `fc03ec2`, values saved through the
-    /// settings form reach the plugin still encrypted when deckwatch has
+    /// A `secret` field. deckwatch (0.7.0 and v0.6.7) passes values saved
+    /// through the settings form to the plugin still encrypted when it has
     /// `DECKWATCH_ENCRYPTION_KEY` set (alexconrey/deckwatch#251).
     pub api_token: Option<String>,
     pub sidecar_enabled: bool,
