@@ -6,7 +6,7 @@ A reference [deckwatch](https://github.com/alexconrey/deckwatch) plugin that use
 |---|---|
 | SDK | `deckwatch-plugin-sdk` `v0.10.0` |
 | Rust | 1.99, pinned in `rust-toolchain.toml` |
-| deckwatch | **0.7.0 or later** (not yet tagged; checked against `main` at `58ff03c`), the first version that understands the two `key_value` settings and reads plugin events. The rest works on v0.6.4+, but v0.6.7 and older can't parse this plugin's metadata. See [compatibility](#compatibility) |
+| deckwatch | **0.7.0 or later** (not yet tagged; checked against `main` at `604a36f`), the first version that understands the two `key_value` settings and reads plugin events. The rest works on v0.6.4+, but v0.6.7 and older can't parse this plugin's metadata. See [compatibility](#compatibility) |
 
 ## What it does
 
@@ -103,11 +103,11 @@ Not used, on purpose:
 
    The next create or update through deckwatch's REST API (`POST /api/namespaces/{ns}/deployments` or `PUT /api/namespaces/{ns}/deployments/{name}`) runs `apply()`. deckwatch adds the env vars, the agent sidecar, its init container and the ServiceAccount name to the Deployment, then creates the ConfigMap and the ServiceAccount. The annotation and label come later ([below](#what-deckwatch-does-with-it-today)). MCP `create_deployment` and `update_deployment`, and YAML edits, don't run plugins ([deckwatch#283](https://github.com/alexconrey/deckwatch/issues/283)).
 
-3. **Provision the cache.** On the application's page, add **Example cache**, choosing a size and optional tags. deckwatch 0.7.0 shows `TAGS` as a text input and doesn't check it, so enter a JSON object such as `{"team":"shop"}`. The Redis sidecar is added to every Deployment and CronJob labelled `deckwatch.io/application=<app>` on the next reconcile, and `EXAMPLE_CACHE_HOST`, `EXAMPLE_CACHE_PORT` and `EXAMPLE_CACHE_STATUS` appear as env vars.
+3. **Provision the cache.** On the application's page, click **Provision** on the **Example cache** card, and choose a size and optional tags. deckwatch 0.7.0 shows `TAGS` as a text input and doesn't check it, so enter a JSON object such as `{"team":"shop"}`. Over MCP `provision_resource`, send `TAGS` as a JSON string: deckwatch 0.7.0 rejects any other value. The Redis sidecar is added to every Deployment and CronJob labelled `deckwatch.io/application=<app>` on the next reconcile, and `EXAMPLE_CACHE_HOST`, `EXAMPLE_CACHE_PORT` and `EXAMPLE_CACHE_STATUS` appear as env vars.
 
 ## What deckwatch does with it today
 
-Checked against deckwatch 0.7.0 (not yet tagged; `main` at `58ff03c`). The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#host-behaviour) has the details, including how the v0.6.7 release differs.
+Checked against deckwatch 0.7.0 (not yet tagged; `main` at `604a36f`). The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#host-behaviour) has the details, including how the v0.6.7 release differs.
 
 - **Events** are logged and returned in the create/update and provisioning responses. deckwatch drops the legacy copies the helpers write, so nothing is reported twice. For Deployments labelled `deckwatch.io/application`, and for the cache, deckwatch also records them on the plugin's status (shown on the application page), which drives Kubernetes Events and notifications.
   - **Configuration problems** are warnings: they mark the plugin **degraded** for the application, with a `PluginApplyWarning` Kubernetes Event on the affected Deployment.
@@ -115,13 +115,12 @@ Checked against deckwatch 0.7.0 (not yet tagged; `main` at `58ff03c`). The [SDK 
   - The info events (`example.cache_creating`, `example.cache_ready`) never become Kubernetes Events. A provision or refresh with no warnings or errors gets a `PluginProvisioned` event instead.
 - **`trace_context`** arrives while deckwatch exports OTLP traces, and the webhook forwards it as `traceparent`.
 - **Deprovisioning** deletes the warm-up Job and the cache's ServiceAccount listed in `delete_kubernetes_resources`. The deprovision `message` comes back in the DELETE response, appears in the UI, and becomes the note of a `PluginDeprovisioned` Kubernetes Event.
-- **The field sweep:** when an application's last resource (here, the cache) is removed, deckwatch removes everything its reconcile loop applied: the cache sidecar, its env vars and annotation, and `apply()`'s annotation and label.
+- **The field sweep:** when an application's last resource (here, the cache) is removed, deckwatch removes everything its reconcile loop applied to workloads it stamped with its `plugins.deckwatch.io/fields-owner` annotation: the cache sidecar, its env vars and annotation, and `apply()`'s annotation and label.
 - **Still open in deckwatch:**
   - `deployment_annotations` and `deployment_labels` from `apply()` are only applied by the reconcile loop, so the annotation and label only appear on the Deployments of an application with a provisioned resource ([deckwatch#244](https://github.com/alexconrey/deckwatch/issues/244));
   - nothing `apply()` injected is removed when the plugin is disabled or a Deployment opts out ([deckwatch#248](https://github.com/alexconrey/deckwatch/issues/248)), and the ConfigMap and ServiceAccount it created aren't deleted either;
   - init containers from `apply()` are appended after the workload's own, and those from `provision()` are never stored ([deckwatch#249](https://github.com/alexconrey/deckwatch/issues/249));
-  - the `API_TOKEN` secret reaches the plugin encrypted when it was saved through the settings form and deckwatch has `DECKWATCH_ENCRYPTION_KEY` set ([deckwatch#251](https://github.com/alexconrey/deckwatch/issues/251));
-  - over MCP `provision_resource`, pass `TAGS` as a JSON string: a non-string value makes deckwatch drop every field ([deckwatch#302](https://github.com/alexconrey/deckwatch/issues/302)).
+  - the `API_TOKEN` secret reaches the plugin encrypted when it was saved through the settings form and deckwatch has `DECKWATCH_ENCRYPTION_KEY` set ([deckwatch#251](https://github.com/alexconrey/deckwatch/issues/251)).
 - **The webhook:**
   - HTTP error statuses come back to the plugin and become a retryable warning.
   - A request that can't be made at all aborts the whole `provision()` call: deckwatch reports a `plugin.trap` error, and provisioning fails with HTTP 502. That covers a host not in `allowed_hosts`, a bad URL, and DNS or connection failures. extism handles these in the host, so the plugin can't catch them.
@@ -171,6 +170,8 @@ Bump `version` in `Cargo.toml`, merge, then push a matching tag (`vX.Y.Z`).
 - creates the GitHub Release with `plugin.wasm` and `SHA256SUMS`.
 
 Put that checksum in the plugin's `sha256` setting so deckwatch rejects any other binary.
+
+**Upgrading** means pointing `ref` at the new tag and updating `sha256` in one save. deckwatch 0.7.0 refuses that save until the masked config values are entered again. For this plugin that's only `API_TOKEN`, if it's set: every other setting is declared non-secret in `metadata()`, so deckwatch doesn't mask it.
 
 ## Using this as a template
 

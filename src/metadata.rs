@@ -25,7 +25,7 @@ pub const NAME: &str = "example";
 pub const PROVIDES: &str = "example:greeting";
 pub const OPTIONAL_DEPENDS_ON: &str = "aws:iam-role";
 
-/// deckwatch 0.7.0 (not yet tagged; checked against `main` at `58ff03c`) is
+/// deckwatch 0.7.0 (not yet tagged; checked against `main` at `604a36f`) is
 /// the first version that understands the `key_value` fields below and
 /// reads `events`. Sidecar volumes, split requests and limits, init
 /// containers and this check itself need v0.6.4+. A deckwatch that predates
