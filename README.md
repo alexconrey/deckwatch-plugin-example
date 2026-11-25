@@ -123,7 +123,7 @@ Checked against deckwatch 0.7.0 (not yet tagged; `main` at `58ff03c`). The [SDK 
   - over MCP `provision_resource`, pass `TAGS` as a JSON string: a non-string value makes deckwatch drop every field ([deckwatch#302](https://github.com/alexconrey/deckwatch/issues/302)).
 - **The webhook:**
   - HTTP error statuses come back to the plugin and become a retryable warning.
-  - A request that can't be made at all aborts the whole `provision()` call, and provisioning fails with HTTP 502. That covers a host not in `allowed_hosts`, a bad URL, and DNS or connection failures. extism handles these in the host, so the plugin can't catch them.
+  - A request that can't be made at all aborts the whole `provision()` call: deckwatch reports a `plugin.trap` error, and provisioning fails with HTTP 502. That covers a host not in `allowed_hosts`, a bad URL, and DNS or connection failures. extism handles these in the host, so the plugin can't catch them.
   - **No timeout.** extism has no HTTP timeout of its own, and deckwatch sets no time limit on plugin calls ([deckwatch#301](https://github.com/alexconrey/deckwatch/issues/301)), so a webhook that accepts the connection but never answers holds up the provisioning request indefinitely.
 - **Log lines** from the PDK macros at `info` and above appear in deckwatch's logs by default since deckwatch `36e6637` (target `extism::pdk`), inside a span that names the plugin. `apply()`'s `debug!` lines also need `extism::pdk=debug` in `RUST_LOG`, which replaces deckwatch's whole default filter.
 
