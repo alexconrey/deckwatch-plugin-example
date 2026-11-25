@@ -1,18 +1,21 @@
 [package]
 name = "deckwatch-plugin-example"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+description = "Reference deckwatch plugin that exercises every feature of deckwatch-plugin-sdk"
+repository = "https://github.com/alexconrey/deckwatch-plugin-example"
+publish = false
 
-# Plugins must produce a cdylib so the WASM linker emits a proper module
-# with exported functions. Don't add "rlib": with it, `cargo test` on the host
-# fails to link, because extism's host imports only exist in wasm.
+# Plugins must produce a cdylib so the WASM linker emits a proper module with
+# exported functions. Don't add "rlib": the #[plugin_fn] exports here are
+# limited to wasm32 (src/exports.rs), so it would work, but it isn't needed.
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-# extism PDK provides the #[plugin_fn] macro and the Json/FnResult types.
+# extism PDK: #[plugin_fn], Json/FnResult, config::get, http::request, log
+# macros. The default "http" feature provides HttpRequest.
 extism-pdk = "1"
-# Shared types — update the git ref to pin a specific SDK release.
+# Pin the SDK by tag, never by branch.
 deckwatch-plugin-sdk = { git = "https://github.com/alexconrey/deckwatch-plugin-sdk", tag = "v0.10.0" }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
