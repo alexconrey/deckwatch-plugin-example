@@ -6,7 +6,7 @@ A reference [deckwatch](https://github.com/alexconrey/deckwatch) plugin that use
 |---|---|
 | SDK | `deckwatch-plugin-sdk` `v0.10.0` |
 | Rust | 1.99, pinned in `rust-toolchain.toml` |
-| deckwatch | **0.7.0 or later** (not yet tagged; checked against `main` at `604a36f`), the first version that understands the two `key_value` settings and reads plugin events. The rest works on v0.6.4+, but v0.6.7 and older can't parse this plugin's metadata. See [compatibility](#compatibility) |
+| deckwatch | **v0.7.0 or later** (checked against the v0.7.0 release), the first release that understands the two `key_value` settings and reads plugin events. The rest works on v0.6.4+, but v0.6.7 and older can't parse this plugin's metadata. See [compatibility](#compatibility) |
 
 ## What it does
 
@@ -107,7 +107,7 @@ Not used, on purpose:
 
 ## What deckwatch does with it today
 
-Checked against deckwatch 0.7.0 (not yet tagged; `main` at `604a36f`). The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#host-behaviour) has the details, including how the v0.6.7 release differs.
+Checked against the deckwatch v0.7.0 release. The [SDK README](https://github.com/alexconrey/deckwatch-plugin-sdk#host-behaviour) has the details, including how the v0.6.7 release differs.
 
 - **Events** are logged and returned in the create/update and provisioning responses. deckwatch drops the legacy copies the helpers write, so nothing is reported twice. For Deployments labelled `deckwatch.io/application`, and for the cache, deckwatch also records them on the plugin's status (shown on the application page), which drives Kubernetes Events and notifications.
   - **Configuration problems** are warnings: they mark the plugin **degraded** for the application, with a `PluginApplyWarning` Kubernetes Event on the affected Deployment.
@@ -129,7 +129,7 @@ Checked against deckwatch 0.7.0 (not yet tagged; `main` at `604a36f`). The [SDK 
 
 ## Compatibility
 
-- **deckwatch 0.7.0+** (not yet tagged): everything. The plugin declares `min_deckwatch_version: "0.7.0"`.
+- **deckwatch v0.7.0+**: everything. The plugin declares `min_deckwatch_version: "0.7.0"`.
 - **deckwatch v0.6.7 and older can't parse the plugin's metadata**, because they don't know `key_value`.
   - They log that only at `DEBUG`, and load the plugin with empty metadata: no settings form, no cache resource, and no version check.
   - `apply()` still runs, with the `config` values stored in the plugin's entry. Its events are ignored; only their legacy copies in `warnings` are logged.

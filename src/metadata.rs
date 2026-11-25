@@ -25,12 +25,11 @@ pub const NAME: &str = "example";
 pub const PROVIDES: &str = "example:greeting";
 pub const OPTIONAL_DEPENDS_ON: &str = "aws:iam-role";
 
-/// deckwatch 0.7.0 (not yet tagged; checked against `main` at `604a36f`) is
-/// the first version that understands the `key_value` fields below and
-/// reads `events`. Sidecar volumes, split requests and limits, init
-/// containers and this check itself need v0.6.4+. A deckwatch that predates
-/// `key_value` can't parse this metadata at all, so on those this check never
-/// runs; see [`config_schema`].
+/// deckwatch v0.7.0 is the first release that understands the `key_value`
+/// fields below and reads `events`. Sidecar volumes, split requests and
+/// limits, init containers and this check itself need v0.6.4+. A deckwatch
+/// that predates `key_value` can't parse this metadata at all, so on those
+/// this check never runs; see [`config_schema`].
 pub const MIN_DECKWATCH_VERSION: &str = "0.7.0";
 
 /// Config keys. The settings form saves values under these, and
@@ -134,10 +133,10 @@ fn size_options() -> Vec<String> {
 
 /// The settings form: one field of each type a plugin should send.
 ///
-/// **`key_value` needs deckwatch 0.7.0** (not yet tagged; on `main` since
-/// `278de71`). The v0.6.7 release and older reject this plugin's whole
-/// metadata, so the plugin loads with no settings form and no cache resource
-/// (`apply` still runs). Drop the `key_value` fields, and lower
+/// **`key_value` needs deckwatch v0.7.0** (on `main` since `278de71`). The
+/// v0.6.7 release and older reject this plugin's whole metadata, so the
+/// plugin loads with no settings form and no cache resource (`apply` still
+/// runs). Drop the `key_value` fields, and lower
 /// [`MIN_DECKWATCH_VERSION`], if you target v0.6.7.
 pub fn config_schema() -> Vec<ConfigField> {
     vec![
