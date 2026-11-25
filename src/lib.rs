@@ -26,10 +26,12 @@ pub fn apply(Json(ctx): Json<PluginContext>) -> FnResult<Json<PluginResult>> {
                 "postgres://db.myorg.internal:5432/{}",
                 ctx.deployment_name
             ),
+            ..Default::default()
         });
         result.env_vars.push(EnvVarSpec {
             name: "DB_POOL_SIZE".into(),
             value: "10".into(),
+            ..Default::default()
         });
     }
 
@@ -49,15 +51,18 @@ pub fn apply(Json(ctx): Json<PluginContext>) -> FnResult<Json<PluginResult>> {
                 EnvVarSpec {
                     name: "MESH_NAMESPACE".into(),
                     value: ctx.namespace.clone(),
+                    ..Default::default()
                 },
                 EnvVarSpec {
                     name: "MESH_SERVICE".into(),
                     value: ctx.deployment_name.clone(),
+                    ..Default::default()
                 },
             ],
             port: Some(15000),
             cpu: Some("50m".into()),
             memory: Some("64Mi".into()),
+            ..Default::default()
         });
     }
 
@@ -78,6 +83,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             labels: HashMap::new(),
+            ..Default::default()
         }
     }
 
@@ -118,10 +124,12 @@ fn apply_inner(ctx: &PluginContext) -> PluginResult {
                 "postgres://db.myorg.internal:5432/{}",
                 ctx.deployment_name
             ),
+            ..Default::default()
         });
         result.env_vars.push(EnvVarSpec {
             name: "DB_POOL_SIZE".into(),
             value: "10".into(),
+            ..Default::default()
         });
     }
 
@@ -138,15 +146,18 @@ fn apply_inner(ctx: &PluginContext) -> PluginResult {
                 EnvVarSpec {
                     name: "MESH_NAMESPACE".into(),
                     value: ctx.namespace.clone(),
+                    ..Default::default()
                 },
                 EnvVarSpec {
                     name: "MESH_SERVICE".into(),
                     value: ctx.deployment_name.clone(),
+                    ..Default::default()
                 },
             ],
             port: Some(15000),
             cpu: Some("50m".into()),
             memory: Some("64Mi".into()),
+            ..Default::default()
         });
     }
 
